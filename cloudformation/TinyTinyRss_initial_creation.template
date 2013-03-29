@@ -1,0 +1,439 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  
+  "Description" : "Tiny Tiny RSS CloudFormation template.  This template is intended for the initial installation and configuration of Tiny Tiny RSS using the Amazon Linux AMI. After performing a database backup to S3, use other CFN template for Tiny Tiny RSS to run in an AutoScaling Group utilizing spot instances.",
+  
+  "Parameters" : {
+    "WebSiteAlias" : {
+      "Default" : "reader.mydomain.com",
+      "Description" : "Hostname used to access Tiny Tiny RSS",
+      "Type" : "String"
+    },
+
+    "ElasticIp" : {
+      "Description" : "IP Address to assign to the instance",
+      "Type" : "String",
+      "AllowedPattern" : "[0-9.]*"
+    },
+
+    "KeyName" : {
+      "Description" : "Name of an existing EC2 KeyPair to enable SSH access to the instances",
+      "Type" : "String"
+    },    
+
+    "BucketName" : {
+      "Description" : "Bucket where backup database files are stored.",
+      "Type" : "String",
+      "AllowedPattern" : "[^ \t]*",
+      "Default" : "my.s3.bucket"
+    },
+    
+    "BucketDirectory" : {
+      "Description" : "Additional path information to backup database files",
+      "Type" : "String",
+      "Default" : "backups"
+    },
+    
+    "InstanceType" : {
+      "Description" : "WebServer EC2 instance type",
+      "Type" : "String",
+      "Default" : "t1.micro",
+      "AllowedValues" : [ "t1.micro","m1.small","m1.medium","m1.large","m1.xlarge","m2.xlarge","m2.2xlarge","m2.4xlarge","m3.xlarge","m3.2xlarge","c1.medium","c1.xlarge","cc1.4xlarge","cc2.8xlarge","cg1.4xlarge","hi1.4xlarge"],
+      "ConstraintDescription" : "must be a valid EC2 instance type."
+    },
+          
+    "DBName": {
+      "Default": "ttrssdb",
+      "Description" : "The Tiny Tiny RSS database name",
+      "Type": "String",
+      "MinLength": "1",
+      "MaxLength": "64",
+      "AllowedPattern" : "[a-zA-Z][a-zA-Z0-9]*",
+      "ConstraintDescription" : "must begin with a letter and contain only alphanumeric characters."
+    },
+    
+    "DBUsername": {
+      "Default": "admin",
+      "NoEcho": "true",
+      "Description" : "The Tiny Tiny RSS database admin account username",
+      "Type": "String",
+      "MinLength": "1",
+      "MaxLength": "16",
+      "AllowedPattern" : "[a-zA-Z][a-zA-Z0-9]*",
+      "ConstraintDescription" : "must begin with a letter and contain only alphanumeric characters."
+    },
+    
+    "DBPassword": {
+      "Default": "admin",
+      "NoEcho": "true",
+      "Description" : "The Tiny Tiny RSS database admin account password",
+      "Type": "String",
+      "MinLength": "1",
+      "MaxLength": "41",
+      "AllowedPattern" : "[a-zA-Z0-9]*",
+      "ConstraintDescription" : "must contain only alphanumeric characters."
+    },
+
+    "DBBackupUsername": {
+      "Default": "backup",
+      "NoEcho": "true",
+      "Description" : "The database account username that has permissions to backup MySQL",
+      "Type": "String",
+      "MinLength": "1",
+      "MaxLength": "41",
+      "AllowedPattern" : "[a-zA-Z0-9]*",
+      "ConstraintDescription" : "Must contain only alphanumeric characters."
+    },
+    
+    "DBBackupPassword": {
+      "Default": "backup",
+      "NoEcho": "true",
+      "Description" : "The database account password that has permissions to backup MySQL",
+      "Type": "String",
+      "MinLength": "1",
+      "MaxLength": "41",
+      "AllowedPattern" : "[a-zA-Z0-9]*",
+      "ConstraintDescription" : "Must contain only alphanumeric characters."
+    },
+
+    "DBRootPassword": {
+      "NoEcho": "true",
+      "Description" : "Root password for MySQL",
+      "Type": "String",
+      "MinLength": "1",
+      "MaxLength": "41",
+      "AllowedPattern" : "[a-zA-Z0-9]*",
+      "ConstraintDescription" : "must contain only alphanumeric characters."
+    }   
+  },
+  
+  "Mappings" : {
+    "AWSInstanceType2Arch" : {
+      "t1.micro"    : { "Arch" : "64" },
+      "m1.small"    : { "Arch" : "64" },
+      "m1.medium"   : { "Arch" : "64" },
+      "m1.large"    : { "Arch" : "64" },
+      "m1.xlarge"   : { "Arch" : "64" },
+      "m2.xlarge"   : { "Arch" : "64" },
+      "m2.2xlarge"  : { "Arch" : "64" },
+      "m2.4xlarge"  : { "Arch" : "64" },
+      "c1.medium"   : { "Arch" : "64" },
+      "c1.xlarge"   : { "Arch" : "64" },
+      "cc1.4xlarge" : { "Arch" : "64HVM" },
+      "cc2.8xlarge" : { "Arch" : "64HVM" },
+      "cg1.4xlarge" : { "Arch" : "64HVM" }
+    },
+
+    "AWSRegionArch2AMI" : {
+      "us-east-1"      : { "32" : "ami-31814f58", "64" : "ami-1b814f72", "64HVM" : "ami-0da96764" },
+      "us-west-2"      : { "32" : "ami-38fe7308", "64" : "ami-30fe7300", "64HVM" : "NOT_YET_SUPPORTED" },
+      "us-west-1"      : { "32" : "ami-11d68a54", "64" : "ami-1bd68a5e", "64HVM" : "NOT_YET_SUPPORTED" },
+      "eu-west-1"      : { "32" : "ami-973b06e3", "64" : "ami-953b06e1", "64HVM" : "NOT_YET_SUPPORTED" },
+      "ap-southeast-1" : { "32" : "ami-b4b0cae6", "64" : "ami-beb0caec", "64HVM" : "NOT_YET_SUPPORTED" },
+      "ap-northeast-1" : { "32" : "ami-0644f007", "64" : "ami-0a44f00b", "64HVM" : "NOT_YET_SUPPORTED" },
+      "sa-east-1"      : { "32" : "ami-3e3be423", "64" : "ami-3c3be421", "64HVM" : "NOT_YET_SUPPORTED" }
+    }
+  },
+    
+  "Resources" : {     
+      
+    "TTRSSAppAndDbServerRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "ec2.amazonaws.com"
+                ]
+              },
+              "Action": [
+                "sts:AssumeRole"
+              ]
+            }
+          ]
+        },
+        "Path": "/"
+      }
+    },
+
+    "TTRSSAppAndDbServerRolePolicies": {
+      "Type": "AWS::IAM::Policy",
+      "Properties": {
+        "PolicyName": "S3Write",
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "s3:ListBucket",
+                "s3:PutObject"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            },
+            {
+              "Action":[
+                "ec2:AssociateAddress"
+              ],
+              "Effect":"Allow",
+              "Resource":"*"
+            }
+          ]
+        },
+      "Roles": [
+        { "Ref": "TTRSSAppAndDbServerRole" }
+      ]
+      }
+    },
+
+    "TTRSSAppAndDbServerInstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "Path": "/",
+        "Roles": [
+          { "Ref": "TTRSSAppAndDbServerRole" }
+        ]
+      }
+    },
+
+    "CfnUser" : {
+      "Type" : "AWS::IAM::User",
+      "Properties" : {
+        "Path": "/",
+        "Policies": [{
+          "PolicyName": "root",
+          "PolicyDocument": { "Statement":[{
+            "Effect":"Allow",
+            "Action":"cloudformation:DescribeStackResource",
+            "Resource":"*"
+          }]}
+        }]
+      }
+    },
+
+    "HostKeys" : {
+      "Type" : "AWS::IAM::AccessKey",
+      "Properties" : {
+        "UserName" : {"Ref": "CfnUser"}
+      }
+    },
+
+    "WebServer": {  
+      "Type": "AWS::EC2::Instance",
+      "Metadata" : {
+        "AWS::CloudFormation::Init" : {
+          "config" : {
+            "packages" : {
+              "yum" : {
+                "httpd"        : [],
+                "php"          : [],
+                "php-mysql"    : [],
+                "php-mbstring" : [],
+                "php-xml"      : [],
+                "mysql"        : [],
+                "mysql-server" : [],
+                "mysql-devel"  : [],
+                "mysql-libs"   : [],
+                "python-boto"  : []
+              }
+            },
+
+            "sources" : {
+              "/var/www/html" : "https://github.com/gothfox/Tiny-Tiny-RSS/archive/1.7.5.tar.gz"
+            },
+
+            "files" : {
+              "/tmp/setup.mysql" : {
+                "content" : { "Fn::Join" : ["", [
+                  "CREATE DATABASE ", { "Ref" : "DBName" }, ";\n",
+                  "CREATE USER '", { "Ref" : "DBUsername" }, "'@'localhost' IDENTIFIED BY '", { "Ref" : "DBPassword" }, "';\n",
+                  "GRANT ALL ON ", { "Ref" : "DBName" }, ".* TO '", { "Ref" : "DBUsername" }, "'@'localhost';\n",
+                  "GRANT LOCK TABLES, SELECT, SHOW VIEW, RELOAD on *.* to '", { "Ref" : "DBBackupUsername" }, "'@'localhost' IDENTIFIED BY '", { "Ref" : "DBBackupPassword" }, "';\n",
+                  "FLUSH PRIVILEGES;\n"
+                  ]]},
+                "mode"  : "000600",
+                "owner" : "root",
+                "group" : "root"
+              },
+
+              "/var/www/html/Tiny-Tiny-RSS-1.7.5/config.php" : {
+                "content" : { "Fn::Join" : ["", [
+                  "<?php\n",
+                  "  define('DB_TYPE', \"mysql\"); // or mysql\n",
+                  "  define('DB_HOST', \"localhost\");\n",
+                  "  define('DB_USER', \"", { "Ref" : "DBUsername" }, "\");\n",
+                  "  define('DB_NAME', \"", { "Ref" : "DBName" }, "\");\n",
+                  "  define('DB_PASS', \"", { "Ref" : "DBPassword" }, "\");\n",
+                  "  //define('DB_PORT', '5432'); // when neeeded, PG-only\n",
+                  "  define('MYSQL_CHARSET', 'UTF8');\n",
+                  "  define('SELF_URL_PATH', 'http://", { "Ref" : "WebSiteAlias" }, "/');\n",
+                  "  define('SINGLE_USER_MODE', false);\n",
+                  "  define('SIMPLE_UPDATE_MODE', false);\n",
+                  "  define('PHP_EXECUTABLE', '/usr/bin/php');\n",
+                  "  define('LOCK_DIRECTORY', 'lock');\n",
+                  "  define('CACHE_DIR', 'cache');\n",
+                  "  define('ICONS_DIR', \"feed-icons\");\n",
+                  "  define('ICONS_URL', \"feed-icons\");\n",
+                  "  define('AUTH_AUTO_CREATE', true);\n",
+                  "  define('AUTH_AUTO_LOGIN', true);\n",
+                  "  define('FORCE_ARTICLE_PURGE', 0);\n",
+                  "  define('PUBSUBHUBBUB_HUB', '');\n",
+                  "  define('PUBSUBHUBBUB_ENABLED', false);\n",
+                  "  define('SPHINX_ENABLED', false);\n",
+                  "  define('SPHINX_INDEX', 'ttrss');\n",
+                  "  define('ENABLE_REGISTRATION', false);\n",
+                  "  define('REG_NOTIFY_ADDRESS', 'user@your.domain.dom');\n",
+                  "  define('REG_MAX_USERS', 10);\n",
+                  "  define('SESSION_COOKIE_LIFETIME', 86400*30);\n",
+                  "  define('SESSION_EXPIRE_TIME', 86400*30);\n",
+                  "  define('SESSION_CHECK_ADDRESS', 1);\n",
+                  "  define('SMTP_FROM_NAME', 'Tiny Tiny RSS');\n",
+                  "  define('SMTP_FROM_ADDRESS', 'noreply@your.domain.dom');\n",
+                  "  define('DIGEST_SUBJECT', '[tt-rss] New headlines for last 24 hours');\n",
+                  "  define('SMTP_HOST', '');\n",
+                  "  define('SMTP_PORT','');\n",
+                  "  define('SMTP_LOGIN', '');\n",
+                  "  define('SMTP_PASSWORD', '');\n",
+                  "  define('CHECK_FOR_NEW_VERSION', true);\n",
+                  "  define('ENABLE_GZIP_OUTPUT', false);\n",
+                  "  define('PLUGINS', 'auth_remote, auth_internal, note');\n",
+                  "  define('CONFIG_VERSION', 26);\n",
+                  "?>\n",
+                  "\n"
+                ]] },
+                "mode" : "000600",
+                "owner" : "root",
+                "group" : "root"
+              },
+
+              "/home/ec2-user/local/bin/backupMySql.sh" : {
+                "source" : "https://raw.github.com/joehack3r/aws/master/scripts/backupMySql.sh",
+                "mode"  : "000755",
+                "owner" : "ec2-user",
+                "group" : "ec2-user"
+              },
+
+              "/home/ec2-user/local/bin/uploadToS3.py" : {
+                "source" : "https://raw.github.com/joehack3r/aws/master/scripts/uploadToS3.py",
+                "mode"  : "000755",
+                "owner" : "ec2-user",
+                "group" : "ec2-user"
+              },
+
+              "/etc/cron.d/ttrss-update-feeds" : {
+                "content" : { "Fn::Join" : ["", [
+                  "*/5 * * * * apache cd /var/www/html/Tiny-Tiny-RSS-1.7.5/ && /usr/bin/php /var/www/html/Tiny-Tiny-RSS-1.7.5/update.php --feeds >/dev/null 2>&1\n",
+                  "\n"
+                ]] },
+                "mode" : "000600",
+                "owner" : "root",
+                "group" : "root"
+              }
+
+            },
+            "services" : {
+              "sysvinit" : {  
+                "httpd"    : { "enabled" : "true", "ensureRunning" : "true" },
+                "mysqld"   : { "enabled" : "true", "ensureRunning" : "true" },
+                "sendmail" : { "enabled" : "false", "ensureRunning" : "false" }
+              }
+            }
+          }
+        }
+      },
+      "Properties": {
+        "IamInstanceProfile": { "Ref": "TTRSSAppAndDbServerInstanceProfile" },
+        "ImageId" : { "Fn::FindInMap" : [ "AWSRegionArch2AMI", { "Ref" : "AWS::Region" },
+                          { "Fn::FindInMap" : [ "AWSInstanceType2Arch", { "Ref" : "InstanceType" }, "Arch" ] } ] },
+        "InstanceType"   : { "Ref" : "InstanceType" },
+        "SecurityGroups" : [ {"Ref" : "WebServerSecurityGroup"} ],
+        "KeyName"        : { "Ref" : "KeyName" },
+        "Monitoring"     : "false",
+        "UserData"       : { "Fn::Base64" : { "Fn::Join" : ["", [
+          "#!/bin/bash -v\n",
+          "yum update -y aws-cfn-bootstrap\n",
+          "yum update -y aws-*\n",
+
+          "# Helper function\n",
+          "function error_exit\n",
+          "{\n",
+          "  /opt/aws/bin/cfn-signal -e 1 -r \"$1\" '", { "Ref" : "WaitHandle" }, "'\n",
+          "  exit 1\n",
+          "}\n",
+
+          "#Some environment variables needed for the ec2* api commands\n",
+          "export JAVA_HOME=/usr/lib/jvm/jre\n",
+          "export EC2_HOME=/opt/aws/apitools/ec2\n",
+          "instanceId=`curl -l http://169.254.169.254/latest/meta-data/instance-id/`\n",
+
+          "# Install Apache Web Server, MySQL, PHP and Tiny Tiny RSS\n",
+          "/opt/aws/bin/cfn-init -s ", { "Ref" : "AWS::StackName" }, " -r WebServer ",
+          "    --access-key ",  { "Ref" : "HostKeys" },
+          "    --secret-key ", {"Fn::GetAtt": ["HostKeys", "SecretAccessKey"]},
+          "    --region ", { "Ref" : "AWS::Region" }, " || error_exit 'Failed to run cfn-init'\n",
+
+          "# Setup MySQL root password and create a TTRSS and Backup user\n",
+          "mysqladmin -u root password '", { "Ref" : "DBRootPassword" }, "' || error_exit 'Failed to initialize root password'\n",
+          "mysql -u root --password='", { "Ref" : "DBRootPassword" }, "' < /tmp/setup.mysql || error_exit 'Failed to setup MySQL database'\n",
+          "mysql -u root --password='", { "Ref" : "DBRootPassword" }, "' --database=ttrssdb < /var/www/html/Tiny-Tiny-RSS-1.7.5/schema/ttrss_schema_mysql.sql || error_exit 'Failed to create database ttrssdb'\n",
+
+          "#Remove /tmp/setup.mysql with password in it\n",
+          "/bin/rm /tmp/setup.mysql\n",
+
+          "# Setup correct file ownership\n",
+          "chown -R apache:apache /var/www/html\n",
+
+          "# Change DocumentRoot to include Tiny Tiny RSS directory\n",
+          "sed -i 's/\\/var\\/www\\/html/\\/var\\/www\\/html\\/Tiny-Tiny-RSS-1.7.5/' /etc/httpd/conf/httpd.conf\n",
+
+          "# Restart apache (httpd)\n",
+          "/etc/init.d/httpd restart\n",
+          
+          "# Associate the ElasticIP to the instance\n",
+          "/opt/aws/bin/ec2-associate-address ", { "Ref" : "ElasticIp" }, " -i $instanceId\n",
+
+          "# All is well so signal success\n",
+          "/opt/aws/bin/cfn-signal -e 0 -r \"Tiny Tiny RSS setup complete\" '", { "Ref" : "WaitHandle" }, "'\n"
+
+        ]]}}        
+      }
+    },
+
+    "WaitHandle" : {
+      "Type" : "AWS::CloudFormation::WaitConditionHandle"
+    },
+
+    "WaitCondition" : {
+      "Type" : "AWS::CloudFormation::WaitCondition",
+      "DependsOn" : "WebServer",
+      "Properties" : {
+        "Handle" : {"Ref" : "WaitHandle"},
+        "Timeout" : "300"
+      }
+    },
+    
+    "WebServerSecurityGroup" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "Enable HTTP access via port 80 and SSH access",
+        "SecurityGroupIngress" : [
+          {"IpProtocol" : "tcp", "FromPort" : "80", "ToPort" : "80", "CidrIp" : "0.0.0.0/0"},
+          {"IpProtocol" : "tcp", "FromPort" : "22", "ToPort" : "22", "CidrIp" : "0.0.0.0/0"}
+        ]
+      }      
+    }          
+  },
+  
+  "Outputs" : {
+    "WebsiteURL" : {
+      "Value" : { "Fn::Join" : ["", ["http://", { "Ref": "WebSiteAlias" }, "/"]] },
+      "Description" : "Tiny Tiny RSS Website"
+    },
+    "BackupCommand" : {
+      "Value" : { "Fn::Join" : ["", ["/home/ec2-user/local/bin/backupMySql.sh ", { "Ref" : "DBBackupUsername" }, " ", { "Ref" : "DBBackupPassword" }, " ", { "Ref" : "BucketName" }, " ", { "Ref" : "BucketDirectory" }, " \n" ]] },
+      "Description" : "Command to backup MySQL database to S3 for future Tiny Tiny RSS instances to restore."
+    }
+  }
+}
