@@ -319,7 +319,7 @@
 
           "# Setup MySQL root password and create a WordPress and Backup user\n",
           "mysqladmin -u root password '", { "Ref" : "DBRootPassword" }, "' || error_exit 'Failed to initialize root password'\n",
-          "mysql -u root --password='", { "Ref" : "DBRootPassword" }, "' < /tmp/setup.mysql || error_exit 'Failed to create database users'\n",
+          "mysql -u root --password='", { "Ref" : "DBRootPassword" }, "' < /tmp/setup.mysql || error_exit 'Failed to setup MySQL database'\n",
 
           "#Remove /tmp/setup.mysql with password in it\n",
           "/bin/rm /tmp/setup.mysql\n",
