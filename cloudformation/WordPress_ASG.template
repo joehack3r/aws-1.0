@@ -1,0 +1,542 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "WordPress Single Spot Instance in AutoScaling Group using Amazon Linux AMI. Min, Max, and Desired instances are for future use (when moving DB off the single instance). Installs specific WordPress version. Restores existing WordPress database from S3. Backups database to S3. WARNING: You should use your own salts for WordPress: https://api.wordpress.org/secret-key/1.1/salt/",
+
+  "Parameters" : {
+
+    "WordPressVersion" : {
+      "Description" : "Version of WordPress being used. e.g., 3.5.1",
+      "Type" : "String",
+      "AllowedPattern" : "[0-9.]*",
+      "Default" : "3.5.1"
+    },
+
+    "Environment" : {
+      "Description" : "Environment, preferably unique.  No spaces allowed.  For example, development1, test2, or production3.",
+      "Type" : "String",
+      "AllowedPattern" : "[-_a-zA-Z0-9]*",
+      "Default" : "production"
+    },
+    
+    "KeyName" : {
+      "Description" : "Name of an existing EC2 KeyPair to enable SSH access to the instances",
+      "Type" : "String"
+    },    
+    
+    "BucketName" : {
+      "Description" : "Bucket where backup database files are stored.",
+      "Type" : "String",
+      "AllowedPattern" : "[^ \t]*",
+      "Default" : "my.s3.bucket"
+    },
+    
+    "BucketDirectory" : {
+      "Description" : "Additional path information to backup database files",
+      "Type" : "String",
+      "Default" : "backups"
+    },
+    
+    "SpotInstanceType" : {
+      "Description" : "EC2 instance type",
+      "Type" : "String",
+      "Default" : "t1.micro",
+      "AllowedValues" : ["t1.micro","m1.small","m1.medium","m1.large","m1.xlarge","m2.xlarge","m2.2xlarge","m2.4xlarge","m3.xlarge","m3.2xlarge","c1.medium","c1.xlarge","cc1.4xlarge","cc2.8xlarge","cg1.4xlarge","hi1.4xlarge"],
+      "ConstraintDescription" : "Must be a valid EC2 instance type."
+    },
+
+    "SpotInstanceCountMin" : {
+      "Description" : "Min size of spot instances in auto scaling group",
+      "Type" : "String",
+      "Default" : "1"
+    },
+
+    "SpotInstanceCountMax" : {
+      "Description" : "Max size of spot instances in auto scaling group",
+      "Type" : "String",
+      "Default" : "1"
+    },
+
+    "SpotInstanceCountDesired" : {
+      "Description" : "Desired size of spot instances in auto scaling group",
+      "Type" : "String",
+      "Default" : "1"
+    },
+
+    "SpotInstanceAvailabilityZones" : {
+      "Description" : "Availability zones for the spot instances",
+      "Type" : "CommaDelimitedList",
+      "Default" : "us-east-1a, us-east-1b, us-east-1c, us-east-1d"
+    },
+
+    "SpotPrice": {
+      "Description": "Spot price for application auto scaling group instances",
+      "Type": "Number",
+      "Default" : "0.02",
+      "MinValue" : "0"
+    },
+
+    "DBName": {
+      "Default": "wordpress",
+      "Description" : "The WordPress database name",
+      "Type": "String",
+      "MinLength": "1",
+      "MaxLength": "64",
+      "AllowedPattern" : "[a-zA-Z][a-zA-Z0-9]*",
+      "ConstraintDescription" : "must begin with a letter and contain only alphanumeric characters."
+    },
+
+    "DBUsername": {
+      "Default": "admin",
+      "NoEcho": "true",
+      "Description" : "The WordPress database admin account username",
+      "Type": "String",
+      "MinLength": "1",
+      "MaxLength": "16",
+      "AllowedPattern" : "[a-zA-Z][a-zA-Z0-9]*",
+      "ConstraintDescription" : "must begin with a letter and contain only alphanumeric characters."
+    },
+
+    "DBPassword": {
+      "Default": "admin",
+      "NoEcho": "true",
+      "Description" : "The WordPress database admin account password",
+      "Type": "String",
+      "MinLength": "1",
+      "MaxLength": "41",
+      "AllowedPattern" : "[a-zA-Z0-9]*",
+      "ConstraintDescription" : "must contain only alphanumeric characters."
+    },
+
+    "DBBackupUsername": {
+      "Default": "backup",
+      "NoEcho": "true",
+      "Description" : "The database account username that has permissions to backup MySQL",
+      "Type": "String",
+      "MinLength": "1",
+      "MaxLength": "41",
+      "AllowedPattern" : "[a-zA-Z0-9]*",
+      "ConstraintDescription" : "Must contain only alphanumeric characters."
+    },
+    
+    "DBBackupPassword": {
+      "Default": "backup",
+      "NoEcho": "true",
+      "Description" : "The database account password that has permissions to backup MySQL",
+      "Type": "String",
+      "MinLength": "1",
+      "MaxLength": "41",
+      "AllowedPattern" : "[a-zA-Z0-9]*",
+      "ConstraintDescription" : "Must contain only alphanumeric characters."
+    },
+    
+    "DBRootPassword": {
+      "NoEcho": "true",
+      "Description" : "Root password for MySQL",
+      "Type": "String",
+      "MinLength": "1",
+      "MaxLength": "41",
+      "AllowedPattern" : "[a-zA-Z0-9]*",
+      "ConstraintDescription" : "must contain only alphanumeric characters."
+    },
+
+    "ElasticIp" : {
+      "Description" : "IP Address to assign to the instance",
+      "Type" : "String",
+      "AllowedPattern" : "[0-9.]*"
+    }
+
+  },
+
+  "Mappings" : {
+    "AWSInstanceType2Arch" : {
+      "t1.micro"    : { "Arch" : "64" },
+      "m1.small"    : { "Arch" : "64" },
+      "m1.medium"   : { "Arch" : "64" },
+      "m1.large"    : { "Arch" : "64" },
+      "m1.xlarge"   : { "Arch" : "64" },
+      "m2.xlarge"   : { "Arch" : "64" },
+      "m2.2xlarge"  : { "Arch" : "64" },
+      "m2.4xlarge"  : { "Arch" : "64" },
+      "c1.medium"   : { "Arch" : "64" },
+      "c1.xlarge"   : { "Arch" : "64" },
+      "cc1.4xlarge" : { "Arch" : "64HVM" },
+      "cc2.8xlarge" : { "Arch" : "64HVM" },
+      "cg1.4xlarge" : { "Arch" : "64HVM" }
+    },
+
+    "AWSRegionArch2AMI" : {
+      "us-east-1"      : { "32" : "ami-31814f58", "64" : "ami-1b814f72", "64HVM" : "ami-0da96764" },
+      "us-west-2"      : { "32" : "ami-38fe7308", "64" : "ami-30fe7300", "64HVM" : "NOT_YET_SUPPORTED" },
+      "us-west-1"      : { "32" : "ami-11d68a54", "64" : "ami-1bd68a5e", "64HVM" : "NOT_YET_SUPPORTED" },
+      "eu-west-1"      : { "32" : "ami-973b06e3", "64" : "ami-953b06e1", "64HVM" : "NOT_YET_SUPPORTED" },
+      "ap-southeast-1" : { "32" : "ami-b4b0cae6", "64" : "ami-beb0caec", "64HVM" : "NOT_YET_SUPPORTED" },
+      "ap-northeast-1" : { "32" : "ami-0644f007", "64" : "ami-0a44f00b", "64HVM" : "NOT_YET_SUPPORTED" },
+      "sa-east-1"      : { "32" : "ami-3e3be423", "64" : "ami-3c3be421", "64HVM" : "NOT_YET_SUPPORTED" }
+    }
+  },
+
+  "Resources" : {
+
+    "WordPressWebServerSecurityGroup" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "Enable HTTP access via port 80",
+        "SecurityGroupIngress" : [
+          {"IpProtocol" : "tcp", "FromPort" : "80", "ToPort" : "80", "CidrIp" : "0.0.0.0/0"}
+        ]
+      }      
+    },
+
+    "WordPressAppAndDbServerRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "ec2.amazonaws.com"
+                ]
+              },
+              "Action": [
+                "sts:AssumeRole"
+              ]
+            }
+          ]
+        },
+        "Path": "/"
+      }
+    },
+
+    "WordPressAppAndDbServerRolePolicies": {
+      "Type": "AWS::IAM::Policy",
+      "Properties": {
+        "PolicyName": "Ec2AssociateAddresS3ReadWriteBackupsDb",
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Effect":"Allow",
+              "Action": [
+                "s3:GetObject",
+                "s3:ListBucket",
+                "s3:PutObject"
+              ],
+              "Resource":[ 
+                { "Fn::Join" : ["", [ "arn:aws:s3:::", { "Ref" : "BucketName" }, "*" ]]}
+              ]
+            },
+            {
+              "Action":[
+                "ec2:AssociateAddress"
+              ],
+              "Effect":"Allow",
+              "Resource":"*"
+            }
+          ]
+        },
+      "Roles": [
+        { "Ref": "WordPressAppAndDbServerRole" }
+      ]
+      }
+    },
+
+    "WordPressAppAndDbServerInstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "Path": "/",
+        "Roles": [
+          { "Ref": "WordPressAppAndDbServerRole" }
+        ]
+      }
+    },
+
+    "CfnUser" : {
+      "Type" : "AWS::IAM::User",
+      "Properties" : {
+        "Path": "/",
+        "Policies": [{
+          "PolicyName": "root",
+          "PolicyDocument": { "Statement":[{
+            "Effect":"Allow",
+            "Action":"cloudformation:DescribeStackResource",
+            "Resource":"*"
+          }]}
+        }]
+      }
+    },
+
+    "CfnKeys" : {
+      "Type" : "AWS::IAM::AccessKey",
+      "Properties" : {
+        "UserName" : {"Ref": "CfnUser"}
+      }
+    },
+
+    "SpotLaunchConfiguration": {
+      "Type": "AWS::AutoScaling::LaunchConfiguration",
+      "Metadata" : {
+        "AWS::CloudFormation::Init" : {
+          "config" : {
+            "packages" : {
+              "yum" : {
+                "httpd"            : [],
+                "php"              : [],
+                "php-mysql"        : [],
+                "php-xml"          : [],
+                "mysql"            : [],
+                "mysql-server"     : [],
+                "mysql-devel"      : [],
+                "mysql-libs"       : [],
+                "python-boto"      : []
+              }
+            },
+
+            "sources" : {
+              "/var/www/html" : { "Fn::Join" : ["", [ "http://wordpress.org/wordpress-", { "Ref" : "WordPressVersion" }, ".tar.gz" ]]}
+            },
+
+            "files" : {
+
+              "/etc/init/mysqlBackup.conf" : {
+                "content" : { "Fn::Join" : ["", [
+                  "description \"Backup MySQL database at shutdown\"\n",
+                  "\n",
+                  "start on runlevel [!2345]\n",
+                  "\n",
+                  "exec su - ec2-user -c \"/home/ec2-user/local/bin/backupMySql.sh ", { "Ref" : "DBBackupUsername" }, " ", { "Ref" : "DBBackupPassword" }, " ", { "Ref" : "BucketName" }, " ", { "Ref" : "BucketDirectory" }, " > /dev/null 2>&1 \"\n",
+                  "\n"
+                ]] },
+                "mode" : "000644",
+                "owner" : "root",
+                "group" : "root"
+              },
+
+              "/etc/my.cnf" : {
+                "content" : { "Fn::Join" : ["", [
+                  "[mysqld]\n",
+                  "datadir=/var/lib/mysql\n",
+                  "socket=/var/lib/mysql/mysql.sock\n",
+                  "# Disabling symbolic-links is recommended to prevent assorted security risks\n",
+                  "symbolic-links=0\n",
+                  "\n",
+                  "# Had some MySQL crashes on t1.micro instances, so reducing the buffer pool size\n",
+                  "innodb_buffer_pool_size = 10M\n",
+                  "\n",
+                  "[mysqld_safe]\n",
+                  "log-error=/var/log/mysqld.log\n",
+                  "pid-file=/var/run/mysqld/mysqld.pid\n"
+                ]] },
+                "mode" : "000644",
+                "owner" : "root",
+                "group" : "root"
+              },
+
+              "/var/www/html/wordpress/wp-config.php" : {
+                "content" : { "Fn::Join" : ["", [
+                  "<?php\n",
+                  "define('DB_NAME',          '", {"Ref" : "DBName"}, "');\n",
+                  "define('DB_USER',          '", {"Ref" : "DBUsername"}, "');\n",
+                  "define('DB_PASSWORD',      '", {"Ref" : "DBPassword" }, "');\n",
+                  "define('DB_HOST',          'localhost');\n",
+                  "define('DB_CHARSET',       'utf8');\n",
+                  "define('DB_COLLATE',       '');\n",
+                  "define('AUTH_KEY',         'put your unique phrase here');\n",
+                  "define('SECURE_AUTH_KEY',  'put your unique phrase here');\n",
+                  "define('LOGGED_IN_KEY',    'put your unique phrase here');\n",
+                  "define('NONCE_KEY',        'put your unique phrase here');\n",
+                  "define('AUTH_SALT',        'put your unique phrase here');\n",
+                  "define('SECURE_AUTH_SALT', 'put your unique phrase here');\n",
+                  "define('LOGGED_IN_SALT',   'put your unique phrase here');\n",
+                  "define('NONCE_SALT',       'put your unique phrase here');\n",
+                  "define('WPLANG'            , '');\n",
+                  "define('WP_DEBUG'          , false);\n",
+                  "$table_prefix  = 'wp_';\n",
+                  "if ( !defined('ABSPATH') )\n",
+                  "    define('ABSPATH', dirname(__FILE__) . '/');\n",
+                  "require_once(ABSPATH . 'wp-settings.php');\n"
+                ]] },
+                "mode" : "000644",
+                "owner" : "apache",
+                "group" : "apache"
+              },
+
+              "/var/www/html/wordpress/.htaccess" : {
+                "source" : "https://raw.github.com/joehack3r/wordpress/master/htaccess",
+                "mode"  : "000644",
+                "owner" : "apache",
+                "group" : "apache"
+              },
+              
+              "/home/ec2-user/local/bin/downloadFromS3.py" : {
+                "source" : "https://raw.github.com/joehack3r/awsScripts/master/downloadFromS3.py",
+                "mode"  : "000755",
+                "owner" : "ec2-user",
+                "group" : "ec2-user"
+              },
+
+              "/home/ec2-user/local/bin/backupMySql.sh" : {
+                "source" : "https://raw.github.com/joehack3r/awsScripts/master/backupMySql.sh",
+                "mode"  : "000755",
+                "owner" : "ec2-user",
+                "group" : "ec2-user"
+              },
+
+              "/home/ec2-user/local/bin/uploadToS3.py" : {
+                "source" : "https://raw.github.com/joehack3r/awsScripts/master/uploadToS3.py",
+                "mode"  : "000755",
+                "owner" : "ec2-user",
+                "group" : "ec2-user"
+              },
+              
+              "/etc/cron.d/backupMySqlDatabase" : {
+                "content" : { "Fn::Join" : ["", [
+                  "SHELL=/bin/bash\n",
+                  "PATH=$PATH:/etc:/bin:/sbin:/usr/bin:/usr/sbin \n",
+                  "#\n",
+                  "#minute hour mday month wday who command \n",
+                  "#\n",
+                  "#\n",
+                  "0 0 * * * ec2-user /home/ec2-user/local/bin/backupMySql.sh ", { "Ref" : "DBBackupUsername" }, " ", { "Ref" : "DBBackupPassword" }, " ", { "Ref" : "BucketName" }, " ", { "Ref" : "BucketDirectory" }, " > /dev/null 2>&1\n",
+                  "\n"
+                ]] },
+                "mode" : "000600",
+                "owner" : "root",
+                "group" : "root"
+              }
+
+
+            },
+            "services" : {
+              "sysvinit" : {  
+                "crond"    : { "enabled" : "false", "ensureRunning" : "false" },
+                "httpd"    : { "enabled" : "true", "ensureRunning" : "true" },
+                "mysqld"   : { "enabled" : "true", "ensureRunning" : "true" },
+                "sendmail" : { "enabled" : "false", "ensureRunning" : "false" }
+              }
+            }
+          }
+        }
+      },
+      "Properties": {
+        "SpotPrice" : { "Ref" : "SpotPrice" },
+        "IamInstanceProfile": { "Ref": "WordPressAppAndDbServerInstanceProfile" },
+        "ImageId": {
+          "Fn::FindInMap": [
+             "AWSRegionArch2AMI", { "Ref": "AWS::Region" }, { "Fn::FindInMap": 
+               [ "AWSInstanceType2Arch", { "Ref": "SpotInstanceType" }, "Arch" ]
+             }
+           ]
+        },
+        "InstanceType": { "Ref": "SpotInstanceType" },
+        "KeyName": { "Ref": "KeyName" },
+        "InstanceMonitoring": "false",
+        "SecurityGroups": [ { "Ref": "WordPressWebServerSecurityGroup" } ],
+        "UserData"       : { "Fn::Base64" : { "Fn::Join" : ["", [
+          "#!/bin/bash -v\n",
+          "yum update -y aws-cfn-bootstrap\n",
+          "yum update -y aws-*\n",
+
+          "# Helper function\n",
+          "function error_exit\n",
+          "{\n",
+          "  /opt/aws/bin/cfn-signal -e 1 -r \"$1\" '", { "Ref" : "WaitHandle" }, "'\n",
+          "  exit 1\n",
+          "}\n",
+
+          "#Some environment variables needed for the ec2* api commands\n",
+          "export JAVA_HOME=/usr/lib/jvm/jre\n",
+          "export EC2_HOME=/opt/aws/apitools/ec2\n",
+          "instanceId=`curl -l http://169.254.169.254/latest/meta-data/instance-id/`\n",
+
+          "# Install Apache Web Server, MySQL, PHP and WordPress\n",
+          "/opt/aws/bin/cfn-init -s ", { "Ref" : "AWS::StackName" }, " -r SpotLaunchConfiguration ",
+          "    --access-key ",  { "Ref" : "CfnKeys" },
+          "    --secret-key ", {"Fn::GetAtt": ["CfnKeys", "SecretAccessKey"]},
+          "    --region ", { "Ref" : "AWS::Region" }, " || error_exit 'Failed to run cfn-init'\n",
+
+          "# Setup MySQL root password\n",
+          "mysqladmin -u root password '", { "Ref" : "DBRootPassword" }, "' || error_exit 'Failed to initialize root password'\n",
+
+          "# Download most recent MySQL backup and restore it\n",
+          "/home/ec2-user/local/bin/downloadFromS3.py ", { "Ref" : "BucketName" }, " ", { "Ref" : "BucketDirectory" }, " /home/ec2-user/mysqldump.dmp.latest.tgz\n",
+          "tar xzf /home/ec2-user/mysqldump.dmp.latest.tgz; rm /home/ec2-user/mysqldump.dmp.latest.tgz\n",
+          "mysql -u root --password='", { "Ref" : "DBRootPassword" }, "' < mysqldump_all.dmp.* || error_exit 'Failed to restore database'\n",
+          "rm mysqldump_all.dmp.* mysqldump_errors.log.*\n",
+
+          "# Download and extract WordPress themes and plugins.  Didn't work as sources (can only have one source per directory)\n",
+          "# http://stackoverflow.com/questions/12777454/what-is-the-json-format-to-specify-multiple-sources-under-awscloudformation\n",
+          "wget --directory-prefix=/tmp http://wordpress.org/extend/themes/download/default.1.7.2.zip\n",
+          "unzip /tmp/default.1.7.2.zip -d /var/www/html/wordpress/wp-content/themes/\n",
+          "wget --directory-prefix=/tmp http://downloads.wordpress.org/plugin/wp-recaptcha.3.1.6.zip\n",
+          "unzip /tmp/wp-recaptcha.3.1.6.zip -d /var/www/html/wordpress/wp-content/plugins/\n",
+          "wget --directory-prefix=/tmp http://downloads.wordpress.org/plugin/simple-social-sharing.zip\n",
+          "unzip /tmp/simple-social-sharing.zip -d /var/www/html/wordpress/wp-content/plugins/\n",
+          "wget --directory-prefix=/tmp http://downloads.wordpress.org/plugin/google-analytics-for-wordpress.latest-stable.zip\n",
+          "unzip /tmp/google-analytics-for-wordpress.latest-stable.zip -d /var/www/html/wordpress/wp-content/plugins/\n",
+          "wget --directory-prefix=/tmp http://downloads.wordpress.org/plugin/wordpress-seo.1.4.4.zip\n",
+          "unzip /tmp/wordpress-seo.1.4.4.zip -d /var/www/html/wordpress/wp-content/plugins/\n",
+          "wget --directory-prefix=/tmp http://downloads.wordpress.org/plugin/livefyre-comments.zip\n",
+          "unzip /tmp/livefyre-comments.zip -d /var/www/html/wordpress/wp-content/plugins/\n",
+          "/bin/rm /tmp/*.zip\n",
+
+          "# Setup correct file ownership\n",
+          "chown -R apache:apache /var/www/html/wordpress\n",
+
+          "# Change DocumentRoot to include wordpress\n",
+          "sed -i 's/\\/var\\/www\\/html/\\/var\\/www\\/html\\/wordpress/' /etc/httpd/conf/httpd.conf\n",
+
+          "# Change AllowOverride so permalinks with dates work\n",
+          "lineNumber=`egrep -in \"^[^#][[:space:]]*AllowOverride\" /etc/httpd/conf/httpd.conf | sed -n 2p | awk -F\":\" {'print $1'}`\n",
+          "sed -i \"$lineNumber s/None/All/\" /etc/httpd/conf/httpd.conf\n",
+
+          "# Restart apache (httpd)\n",
+          "/etc/init.d/httpd restart\n",
+          
+          "# Restart crond\n",
+          "/etc/init.d/crond restart\n",
+
+          "# Associate the ElasticIP to the instance\n",
+          "/opt/aws/bin/ec2-associate-address ", { "Ref" : "ElasticIp" }, " -i $instanceId\n",
+
+          "# All is well so signal success\n",
+          "/opt/aws/bin/cfn-signal -e 0 -r \"WordPress setup complete\" '", { "Ref" : "WaitHandle" }, "'\n"
+
+        ]]}}
+      }
+    },
+
+    "SpotScalingGroup": {
+      "Type": "AWS::AutoScaling::AutoScalingGroup",
+      "Version": "2009-05-15",
+      "Properties": {
+        "AvailabilityZones": { "Ref" : "SpotInstanceAvailabilityZones" },
+        "LaunchConfigurationName": { "Ref": "SpotLaunchConfiguration" },
+        "MinSize": { "Ref" : "SpotInstanceCountMin" },
+        "MaxSize": { "Ref" : "SpotInstanceCountMax" },
+        "DesiredCapacity": { "Ref" : "SpotInstanceCountDesired" },
+        "Tags": [
+          { "Key" : "environment", "Value" : { "Ref": "Environment" },  "PropagateAtLaunch" : "true" },
+          { "Key" : "product",     "Value" : "Blog",                    "PropagateAtLaunch" : "true" },
+          { "Key" : "role",        "Value" : "WordPressAppAndDbServer", "PropagateAtLaunch" : "true" },
+          { "Key" : "owner",       "Value" : "",                        "PropagateAtLaunch" : "true" }
+        ]
+      }
+    },
+
+    "WaitHandle" : {
+      "Type" : "AWS::CloudFormation::WaitConditionHandle"
+    },
+
+    "WaitCondition" : {
+      "Type" : "AWS::CloudFormation::WaitCondition",
+      "DependsOn" : "SpotScalingGroup",
+      "Properties" : {
+        "Handle" : {"Ref" : "WaitHandle"},
+        "Timeout" : "1800"
+      }
+    }
+
+  }
+}
