@@ -32,6 +32,10 @@ if __name__ == "__main__":
   for arg in sys.argv[3:]:
     print "Downloading %s from bucket %s:%s" % (arg,bucketName,bucketdir)
     fname = os.path.basename(arg)
-    for key in bucket.list(bucketdir+fname):
-      key.get_contents_to_filename(arg)
+    if bucketdir.__len__() == 1:
+      for key in bucket.list(fname):
+        key.get_contents_to_filename(arg)
+    else:
+      for key in bucket.list(bucketdir+fname):
+        key.get_contents_to_filename(arg)
   print "Done."
