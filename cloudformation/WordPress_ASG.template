@@ -370,21 +370,21 @@
               },
               
               "/home/ec2-user/local/bin/downloadFromS3.py" : {
-                "source" : "https://raw.github.com/joehack3r/awsScripts/master/downloadFromS3.py",
+                "source" : "https://raw.github.com/joehack3r/aws/master/scripts/downloadFromS3.py",
                 "mode"  : "000755",
                 "owner" : "ec2-user",
                 "group" : "ec2-user"
               },
 
               "/home/ec2-user/local/bin/backupMySql.sh" : {
-                "source" : "https://raw.github.com/joehack3r/awsScripts/master/backupMySql.sh",
+                "source" : "https://raw.github.com/joehack3r/aws/master/scripts/backupMySql.sh",
                 "mode"  : "000755",
                 "owner" : "ec2-user",
                 "group" : "ec2-user"
               },
 
               "/home/ec2-user/local/bin/uploadToS3.py" : {
-                "source" : "https://raw.github.com/joehack3r/awsScripts/master/uploadToS3.py",
+                "source" : "https://raw.github.com/joehack3r/aws/master/scripts/uploadToS3.py",
                 "mode"  : "000755",
                 "owner" : "ec2-user",
                 "group" : "ec2-user"
