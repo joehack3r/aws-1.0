@@ -1,0 +1,256 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "Octopress Auto Scaling Group",
+
+  "Parameters" : {
+
+    "DefaultVpcSubnetC" : {
+      "Description" : "Physical ID of the private subnet where Octopress instance will go",
+      "Type" : "String"
+    },
+
+    "KeyName" : {
+      "Description" : "Name of an existing EC2 KeyPair to enable SSH access to the instances",
+      "Type" : "String"
+    }, 
+
+    "OctopressAMI" : {
+      "Description" : "AMI for the Octopress server - typically latest Ubuntu LTS image identified from http://cloud.ubuntu.com/ami/",
+      "Type" : "String",
+      "AllowedPattern" : "ami-[0-9a-f]{8,8}"
+    },
+
+    "OctopressAvailabilityZone" : {
+      "Description" : "Availability zones for the instances",
+      "Type" : "String"
+    },
+
+    "OctopressDestinationBucket" : {
+      "Description" : "S3 bucket where files are stored and hosted for http access",
+      "Type" : "String",
+      "AllowedPattern" : "[0-9a-zA-Z.]+"
+    },
+
+    "OctopressInstanceCountMin" : {
+      "Description" : "Min size of instances in auto scaling group",
+      "Type" : "String"
+    },
+
+    "OctopressInstanceCountMax" : {
+      "Description" : "Max size of instances in auto scaling group",
+      "Type" : "String"
+    },
+
+    "OctopressInstanceCountDesired" : {
+      "Description" : "Desired size of instances in auto scaling group",
+      "Type" : "String"
+    },
+
+    "OctopressInstanceType" : {
+      "Description" : "EC2 instance type",
+      "Type" : "String",
+      "AllowedValues" : ["t1.micro","m1.small","m1.medium","m1.large","m1.xlarge","m2.xlarge","m2.2xlarge","m2.4xlarge","m3.xlarge","m3.2xlarge","c1.medium","c1.xlarge","cc1.4xlarge","cc2.8xlarge","cg1.4xlarge","hi1.4xlarge"],
+      "ConstraintDescription" : "Must be a valid EC2 instance type."
+    },
+
+    "OctopressSourceBucket" : {
+      "Description" : "S3 bucket and path where raw files are stored",
+      "Type" : "String",
+      "AllowedPattern" : "[0-9a-zA-Z.]+"
+    },
+
+    "VpcPrivateOctopressSecurityGroupId" : {
+      "Description" : "Security group created from data cloudlet for the Octopress server to reside",
+      "Type" : "String",
+      "AllowedPattern" : "sg-[0-9a-f]{8,8}"
+    }
+    
+  },
+
+  "Resources" : {
+
+    "OctopressRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "ec2.amazonaws.com"
+                ]
+              },
+              "Action": [
+                "sts:AssumeRole"
+              ]
+            }
+          ]
+        },
+        "Path": "/"
+      }
+    },
+
+    "OctopressRolePolicies": {
+      "Type": "AWS::IAM::Policy",
+      "Properties": {
+        "PolicyName": "Octopress",
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action"   : [
+                "cloudformation:DescribeStackResource"
+              ],
+              "Effect":"Allow",
+              "Resource":"*"
+            },
+            {
+              "Action": [
+                "s3:GetObject",
+                "s3:GetObjectVersion",
+                "s3:ListAllMyBuckets",
+                "s3:ListBucket",
+                "s3:ListBucketVersions"
+              ],
+              "Effect":"Allow",
+              "Resource":[ 
+                { "Fn::Join" : ["", [ "arn:aws:s3:::", { "Ref" : "OctopressSourceBucket" } ]]},
+                { "Fn::Join" : ["", [ "arn:aws:s3:::", { "Ref" : "OctopressSourceBucket" }, "/*" ]]}
+              ]
+            },
+            {
+              "Action": [
+                "s3:DeleteObject",
+                "s3:ListAllMyBuckets",
+                "s3:ListBucket",
+                "s3:PutObject"
+              ],
+              "Effect":"Allow",
+              "Resource":[ 
+                { "Fn::Join" : ["", [ "arn:aws:s3:::", { "Ref" : "OctopressDestinationBucket" } ]]},
+                { "Fn::Join" : ["", [ "arn:aws:s3:::", { "Ref" : "OctopressDestinationBucket" }, "/*" ]]}
+              ]
+            }
+
+          ]
+        },
+      "Roles": [
+        { "Ref": "OctopressRole" }
+      ]
+      }
+    },
+
+    "OctopressInstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "Path": "/",
+        "Roles": [
+          { "Ref": "OctopressRole" }
+        ]
+      }
+    },
+
+    "OctopressWaitHandle" : {
+      "Type" : "AWS::CloudFormation::WaitConditionHandle"
+    },
+
+    "OctopressLaunchConfiguration": {
+      "Type": "AWS::AutoScaling::LaunchConfiguration",
+      "Properties": {
+        "IamInstanceProfile": { "Ref": "OctopressInstanceProfile" },
+        "ImageId": { "Ref" : "OctopressAMI" },
+        "InstanceType": { "Ref": "OctopressInstanceType" },
+        "KeyName": { "Ref": "KeyName" },
+        "InstanceMonitoring": "false",
+        "SecurityGroups": [ { "Ref": "VpcPrivateOctopressSecurityGroupId" } ],
+        "UserData"       : { "Fn::Base64" : { "Fn::Join" : ["", [
+          "#!/bin/bash -v\n",
+
+          "# Helper function\n",
+          "function error_exit\n",
+          "{\n",
+          "  cfn-signal -e 1 -r \"$1\" '", { "Ref" : "OctopressWaitHandle" }, "'\n",
+          "  exit 1\n",
+          "}\n",
+
+          "#Some pre-Octopress steps\n",
+          "apt-get update\n",
+          "apt-get -y upgrade\n",
+          "apt-get -y install git python-dev python-setuptools build-essential\n",
+          "easy_install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-latest.tar.gz\n",
+          "easy_install pip\n",
+          "pip install setuptools --no-use-wheel --upgrade\n",
+
+          "#AWS CLI\n",
+          "apt-get install -y unzip\n",
+          "wget https://s3.amazonaws.com/aws-cli/awscli-bundle.zip\n",
+          "unzip awscli-bundle.zip\n",
+          "./awscli-bundle/install -i /usr/local/aws -b /usr/local/bin/aws\n",
+          "rm -rf awscli-bundle.zip  ./awscli-bundle\n",
+
+          "#Run cfn-init\n",
+          "#cfn-init --region ", { "Ref" : "AWS::Region" },
+          "    -s ", { "Ref" : "AWS::StackId" }, " -r OctopressLaunchConfiguration ",
+          "         || error_exit 'Failed to run cfn-init'\n",
+
+          "#Octopress steps\n",
+          "apt-get -y install bash curl git-core build-essential bison openssl libreadline6 libreadline6-dev zlib1g zlib1g-dev libssl-dev libyaml-dev libsqlite3-0 libsqlite3-dev sqlite3 libxml2-dev libxslt-dev autoconf libc6-dev ncurses-dev automake\n",
+
+          "su - ubuntu -c \"curl -S -L -s https://get.rvm.io | bash -s stable --ruby=1.9.3\"\n",
+          "echo '[[ -s \"$HOME/.rvm/scripts/rvm\" ]] && . \"$HOME/.rvm/scripts/rvm\" # Load RVM function' >> /home/ubuntu/.bashrc\n",
+
+          "su - ubuntu -c \"git clone https://github.com/imathis/octopress.git octopress\"\n",
+          "rm -rf /home/ubuntu/octopress.git\n",
+          "su - ubuntu -c \"cd /home/ubuntu/octopress; bundle install\"\n",
+          "su - ubuntu -c \"cd /home/ubuntu/octopress; rake install\"\n",
+
+          "# All is well so signal success\n",
+          "cfn-signal -e 0 -r \"Octopress instance setup complete\" '", { "Ref" : "OctopressWaitHandle" }, "'\n",
+
+          "# And do a quick reboot since an apt-get upgrade was performed\n",
+          "/bin/sleep 5\n",
+          "/sbin/init 6\n"
+
+        ]]}}
+      }
+    },
+
+    "OctopressScalingGroup": {
+      "Type": "AWS::AutoScaling::AutoScalingGroup",
+      "Version": "2009-05-15",
+      "Properties": {
+        "AvailabilityZones": [{ "Ref" : "OctopressAvailabilityZone" }],
+        "LaunchConfigurationName": { "Ref": "OctopressLaunchConfiguration" },
+        "DesiredCapacity": { "Ref" : "OctopressInstanceCountDesired" },
+        "MaxSize": { "Ref" : "OctopressInstanceCountMax" },
+        "MinSize": { "Ref" : "OctopressInstanceCountMin" },
+        "Tags": [
+            { "Key" : "Name",        "Value" : "octopress", "PropagateAtLaunch" : "true" },
+            { "Key" : "environment", "Value" : "all",             "PropagateAtLaunch" : "true" },
+            { "Key" : "product",     "Value" : "octopress",         "PropagateAtLaunch" : "true" },
+            { "Key" : "role",        "Value" : "octopress",         "PropagateAtLaunch" : "true" },
+            { "Key" : "owner",       "Value" : "JoeHack3r",         "PropagateAtLaunch" : "true" }
+        ],
+        "VPCZoneIdentifier" : [ { "Ref" : "DefaultVpcSubnetC" } ]
+      }
+    },
+
+    "OctopressWaitCondition" : {
+      "Type" : "AWS::CloudFormation::WaitCondition",
+      "DependsOn" : "OctopressScalingGroup",
+      "Properties" : {
+        "Handle" : {"Ref" : "OctopressWaitHandle"},
+        "Timeout" : "1800"
+      }
+    }
+  },
+
+  "Outputs" : {
+    "BlankSpace" : {
+      "Value" : "Empty space",
+      "Description" : "Empty space so easier to copy other outputs."
+    }
+  }
+}
+
