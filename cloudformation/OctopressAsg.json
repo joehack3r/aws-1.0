@@ -1,7 +1,7 @@
 {
   "AWSTemplateFormatVersion" : "2010-09-09",
 
-  "Description" : "Octopress Auto Scaling Group",
+  "Description" : "Octopress Auto Scaling Group and CloudFront distribution",
 
   "Parameters" : {
 
@@ -27,9 +27,15 @@
     },
 
     "OctopressDestinationBucket" : {
-      "Description" : "S3 bucket where files are stored and hosted for http access",
+      "Description" : "S3 bucket where files are stored for CloudFront to cache",
       "Type" : "String",
-      "AllowedPattern" : "[0-9a-zA-Z.]+"
+      "AllowedPattern" : "[0-9a-z.-]+"
+    },
+
+    "OctopressDevBucket" : {
+      "Description" : "S3 bucket where files are stored and hosted for http access for development",
+      "Type" : "String",
+      "AllowedPattern" : "[0-9a-z.-]+"
     },
 
     "OctopressInstanceCountMin" : {
@@ -57,7 +63,7 @@
     "OctopressSourceBucket" : {
       "Description" : "S3 bucket and path where raw files are stored",
       "Type" : "String",
-      "AllowedPattern" : "[0-9a-zA-Z.]+"
+      "AllowedPattern" : "[0-9a-z.-]+"
     },
 
     "VpcPrivateOctopressSecurityGroupId" : {
@@ -65,6 +71,11 @@
       "Type" : "String",
       "AllowedPattern" : "sg-[0-9a-f]{8,8}"
     }
+
+
+
+
+
     
   },
 
@@ -243,7 +254,33 @@
         "Handle" : {"Ref" : "OctopressWaitHandle"},
         "Timeout" : "1800"
       }
+    },
+
+    "OctopressCloudFrontDistribution" : {
+      "Type" : "AWS::CloudFront::Distribution",
+      "Properties" : {
+      "DistributionConfig" : {
+          "Origins" : [ {
+              "DomainName": "cloudfront.joehack3r.com.s3.amazonaws.com",
+              "Id" : "OctoPressS3Origin",
+              "S3OriginConfig" : {
+                  "OriginAccessIdentity" : "origin-access-identity/cloudfront/ENDN37DG9K38Z"
+              }
+          }],
+          "Enabled" : "true",
+          "DefaultRootObject" : "index.html",
+          "Aliases" : [ "cf-test.joehack3r.com" ],
+          "DefaultCacheBehavior" : {
+              "TargetOriginId" : "OctoPressS3Origin",
+              "ForwardedValues" : {
+                  "QueryString" : "false"
+              },
+              "ViewerProtocolPolicy" : "allow-all"
+          }
+        }
+      }
     }
+
   },
 
   "Outputs" : {
